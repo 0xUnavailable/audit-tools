@@ -441,3 +441,57 @@ where:
 - `XXXX` = last 2 bytes of your address (`tx.origin`)
 
 ---
+
+# 12. 
+Inheritance puts parent contract variables at the lowest slots first.
+
+# 13.
+Dynamic array can alter slots
+
+Assume codex is declared at slot p = 2. Let B = keccak256(2) (a big 256-bit number).
+
+main equation
+keccak256(abi.encode(p)) + index = 0
+
+to point to slot 0 
+index = 0 - keccak256(abi.encode(1))
+
+slot X = X - keccak256(abi.encode(p))   ----- BASE FORMULA FOR FINDING SLOTS VIA THE DYNAMIC ARRAY
+
+codex[0] is at storage slot keccak256(abi.encode(1)) + 0
+
+codex[1] is at storage slot keccak256(abi.encode(1)) + 1
+
+codex[i] is at storage slot keccak256(abi.encode(1)) + i
+
+Contract storage (small-index region)
+------------------------------------
+slot 0  → owner
+slot 1  → somethingElse
+slot 2  → codex.length     <-- declared slot p (stores length only)
+slot 3  → otherVar
+slot 4  → moreVars
+...    → ...
+
+Array storage area (far away)
+------------------------------
+slot B + 0  → codex[0]
+slot B + 1  → codex[1]
+slot B + 2  → codex[2]
+...
+slot B + k  → codex[k]
+...
+
+
+# 14. 
+ // The recipient can revert, the owner will still get their share
+        partner.call{value: amountToSend}("");
+        payable(owner).transfer(amountToSend);
+
+        Way to break this, since .call forwards all the gas, if a gas limit is not specified
+        This is different from transfer/send, which forward a fixed 2,300 gas stipend. (may not be sufficient so .call is recommended)
+        using that forwarded gas just trigger an endless loop via a fallback 
+
+         fallback() external payable {
+        while (true) {}
+    }
