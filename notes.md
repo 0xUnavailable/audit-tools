@@ -495,3 +495,82 @@ slot B + k  → codex[k]
          fallback() external payable {
         while (true) {}
     }
+
+ # 15.
+ Don't rely on msg.value for accounting - it's read-only and persists in delegatecalls
+Track actual ETH balance changes:
+ When you use delegatecall, msg.value and msg.sender stays the same throughout ALL nested calls!
+address(this).delegatecall(data[i]);
+               ^^^^^^^^^^^
+               No {value: ...} specified!
+```
+
+wallet.multicall{value: 0.001 ether}([
+    deposit(),                    // data[0]
+    multicall([deposit()])        // data[1]
+]) /// IT PRATICALLY REUSES THE SAME (msg.value)
+```
+
+### **Initial Call**
+```
+Transaction: 0.001 ETH sent to wallet
+msg.value = 0.001 ETH
+msg.sender = attacker
+
+**`delegatecall` NEVER transfers ETH!** It only executes code.
+
+---
+
+## 📝 Visual Breakdown
+```
+┌─────────────────────────────────────────────────────────┐
+│ Original Transaction                                    │
+│ attacker → wallet.multicall{value: 0.001 ETH}([...])  │
+│                                                         │
+│ 0.001 ETH transferred ✅                                │
+│ msg.value = 0.001 ETH (locked for entire call chain)   │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+        ┌─────────────────────────────────────┐
+        │ Outer multicall (depth 0)           │
+        │ depositCalled = false               │
+        └─────────────────────────────────────┘
+                │                 │
+                ▼                 ▼
+    ┌───────────────────┐  ┌──────────────────────────┐
+    │ deposit()         │  │ multicall([deposit()])   │
+    │ (via delegatecall)│  │ (via delegatecall)       │
+    └───────────────────┘  └──────────────────────────┘
+           │                          │
+           │                          ▼
+           │              ┌────────────────────────────┐
+           │              │ Inner multicall (depth 1)  │
+           │              │ depositCalled = false      │
+           │              │ (NEW scope!)               │
+           │              └────────────────────────────┘
+           │                          │
+           │                          ▼
+           │                  ┌───────────────────┐
+           │                  │ deposit()         │
+           │                  │ (via delegatecall)│
+           │                  └───────────────────┘
+           │                          │
+           ▼                          ▼
+    balances[attacker]        balances[attacker]
+    += 0.001 ETH              += 0.001 ETH
+    (reads msg.value)         (reads SAME msg.value!)
+    
+    TOTAL: 0.002 ETH credited
+    ACTUAL ETH SENT: 0.001 ETH
+
+
+# 15. 
+uint256 withdrawAmount = (delegatedAmount * amount + stakes[msg.sender] - 1)  / stakes[msg.sender];
+NEVER USE FLOOR DIVISION
+THEY RESULT IN UNDERFLOWS, USE SAFEMATH IF NEED BE
+
+# 16. 
+Chainlink feeds can become stale if no new price updates have occurred for a significant period, which may result in outdated or inaccurate price information being used by the protocol. 
+The Chainlink interface provides updatedAt and answeredInRound fields specifically to help consumers detect stale or incomplete data, but these are ignored in the current implementation.
+Recommended Mitigation: Implement a staleness check in the getPrice function. For example, require that updatedAt is within an acceptable time window (e.g., not older than a configurable threshold) and that answeredInRound >= roundId. If the data is stale, revert or return an error.
